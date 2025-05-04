@@ -1,11 +1,9 @@
 import streamlit as st
 from groq import Groq
-import os
-from dotenv import load_dotenv
 from openai import OpenAI
 
-# Load environment variables
-load_dotenv()
+# Use Streamlit secrets for API key
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 
 # Set page config
 st.set_page_config(
@@ -17,7 +15,7 @@ st.set_page_config(
 # Initialize Groq client
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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"  # Replace with your actual key
+    api_key=openai_api_key,
 )
 
 # Initialize session state variables
