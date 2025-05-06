@@ -1,6 +1,13 @@
 import streamlit as st
-from groq import Groq
-from openai import OpenAI
+import sys
+import os
+from datetime import datetime
+
+# Add the src directory to the Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from src.chatbot import RealEstateChatbot
+from src.memory.vector_store import VectorStore
 
 # Use Streamlit secrets for API key
 openai_api_key = st.secrets["OPENAI_API_KEY"]
@@ -12,22 +19,71 @@ st.set_page_config(
     layout="centered"
 )
 
-# Initialize Groq client
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=openai_api_key,
-)
+# Initialize chatbot
+if "chatbot" not in st.session_state:
+    st.session_state.chatbot = RealEstateChatbot(api_key=openai_api_key)
 
 # Initialize session state variables
-if "model" not in st.session_state:
-    st.session_state["model"] = "x-ai/grok-3-mini-beta"
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
+    # Add welcome message when first loading
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": "I'm real estate chatbot (testing) ? How can I help you?"
+    })
 
 if "max_messages" not in st.session_state:
     # Counting both user and assistant messages, so 10 rounds of conversation
     st.session_state.max_messages = 20
+
+# Initialize show_suggestions in session state
+if "show_suggestions" not in st.session_state:
+    st.session_state.show_suggestions = True
+
+# Add to session state: track which field to ask next and store user info
+if "user_info" not in st.session_state:
+    st.session_state.user_info = {
+        "name": None,
+        "email": None,
+        "phone": None,
+        "budget": None,
+        "postcode": None,
+        "home_type": None,
+        "intent": None,
+        "step": None  # Tracks which field to ask next
+    }
+
+def get_next_field(intent, user_info):
+    # Define the order of fields for each intent
+    if intent == "buy":
+        fields = ["name", "email", "phone", "budget", "postcode", "home_type"]
+    elif intent == "sell":
+        fields = ["name", "email", "phone", "postcode"]
+    else:
+        return None
+    for field in fields:
+        if not user_info.get(field):
+            return field
+    return None
+
+def get_field_prompt(field):
+    prompts = {
+        "name": "What is your name?",
+        "email": "May I have your email address, please?",
+        "phone": "May I have your phone number, please?",
+        "budget": "What is your budget?",
+        "postcode": "What is your postcode?",
+        "home_type": "Are you interested in a new home or a resale home?"
+    }
+    return prompts.get(field, "")
+
+# Add a function to reset the chat
+def reset_chat():
+    st.session_state.messages = [{
+        "role": "assistant",
+        "content": "I'm real estate chatbot (testing) ? How can I help you?"
+    }]
+    st.session_state.show_suggestions = True
 
 # Custom CSS for better sidebar layout
 st.markdown("""
@@ -114,6 +170,9 @@ with st.sidebar:
         <div class="sidebar-thankyou">Thank you for reviewing assignment</div>
         ''', unsafe_allow_html=True
     )
+    if st.button("Reset Chat", help="Click to start a new conversation"):
+        reset_chat()
+        st.rerun()
 
 # Main content area
 st.title("🏠 Real Estate Decision Assistant")
@@ -133,7 +192,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Check if message limit is reached
+# Main chat logic
 if len(st.session_state.messages) >= st.session_state.max_messages:
     st.info(
         """Notice: The maximum message limit for this demo version has been reached. We value your interest!
@@ -142,44 +201,33 @@ if len(st.session_state.messages) >= st.session_state.max_messages:
         tutorial. Thank you for your understanding."""
     )
 else:
-    # Chat input
-    if prompt := st.chat_input("How can I help you with your real estate needs?"):
-        # Add user message to chat history
+    # Always show chat input
+    prompt = st.chat_input("How can I help you with your real estate needs?")
+    
+    if prompt:
+        # Always add user's message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Display user message
+
+        # Prepare conversation history for the LLM
+        conversation_history = [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in st.session_state.messages
+        ]
+
         with st.chat_message("user"):
             st.markdown(prompt)
-
-        # Get AI response
         with st.chat_message("assistant"):
             try:
-                # Create chat completion with Groq
-                completion = client.chat.completions.create(
-                    model=st.session_state["model"],
-                    messages=[
-                        {"role": m["role"], "content": m["content"]}
-                        for m in st.session_state.messages
-                    ],
-                    temperature=0.7,
-                    max_tokens=1024,
-                    top_p=1,
-                    stream=True,
-                    extra_headers={
-                        "HTTP-Referer": "http://localhost:8501",  # Or your deployed site URL
-                        "X-Title": "Real Estate Decision Assistant"
-                    },
-                    extra_body={},
-                )
-                
-                # Display streaming response
-                response = st.write_stream(completion)
-                # Add assistant response to chat history
+                # Pass the conversation history to the chatbot
+                response = st.session_state.chatbot.process_message(prompt)
+                st.markdown(response["assistant_response"])
                 st.session_state.messages.append(
-                    {"role": "assistant", "content": response}
+                    {"role": "assistant", "content": response["assistant_response"]}
                 )
+                if "conversation_history" not in st.session_state:
+                    st.session_state.conversation_history = []
+                st.session_state.conversation_history.append(response)
             except Exception as e:
-                # Handle rate limiting or other errors
                 st.session_state.max_messages = len(st.session_state.messages)
                 error_message = f"❌ Error: {str(e)}"
                 st.session_state.messages.append(

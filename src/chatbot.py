@@ -1,0 +1,190 @@
+"""
+Core chatbot logic for the Real Estate Decision Assistant.
+"""
+from typing import Dict, List, Any, Optional
+from datetime import datetime
+from openai import OpenAI
+from .utils.postcode_validator import validate_postcode
+from .memory.vector_store import VectorStore
+from .prompts.templates import (
+    INTENT_RECOGNITION_TEMPLATE,
+    RESPONSE_TEMPLATE,
+    POSTCODE_VALIDATION_TEMPLATE
+)
+from langchain.output_parsers import PydanticOutputParser
+from pydantic import BaseModel, validator
+
+class ConciseReply(BaseModel):
+    reply: str
+
+    @validator('reply')
+    def short_reply(cls, value):
+        if len(value.split()) > 25:
+            raise ValueError("Response is too long.")
+        return value
+
+class RealEstateChatbot:
+    def __init__(self, api_key: str, vector_store: Optional[VectorStore] = None):
+        """
+        Initialize the chatbot.
+        
+        Args:
+            api_key: OpenAI API key
+            vector_store: Optional vector store for conversation memory
+        """
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+        self.vector_store = vector_store or VectorStore()
+        self.conversation_history = []
+        self.model = "x-ai/grok-3-mini-beta"
+    
+    def detect_intent(self, message: str) -> str:
+        """
+        Detect the user's intent from their message.
+        
+        Args:
+            message: User's message
+            
+        Returns:
+            Detected intent (BUY_HOME, SELL_HOME, GENERAL_QUERY, or INVALID)
+        """
+        try:
+            completion = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": INTENT_RECOGNITION_TEMPLATE},
+                    {"role": "user", "content": message}
+                ],
+                temperature=0.3,
+                max_tokens=50,
+                top_p=1,
+            )
+            
+            intent = completion.choices[0].message.content.strip().upper()
+            valid_intents = ["BUY_HOME", "SELL_HOME", "GENERAL_QUERY", "INVALID"]
+            
+            # Ensure the intent is valid
+            if intent not in valid_intents:
+                return "GENERAL_QUERY"
+            
+            return intent
+            
+        except Exception as e:
+            print(f"Error detecting intent: {e}")
+            return "GENERAL_QUERY"
+    
+    def validate_postcode(self, postcode: str) -> bool:
+        """
+        Validate a postcode.
+        
+        Args:
+            postcode: Postcode to validate
+            
+        Returns:
+            True if postcode is valid, False otherwise
+        """
+        # TODO: Implement actual postcode validation using the postcode_validator
+        return True
+    
+    def generate_response(
+        self,
+        message: str,
+        intent: str,
+        conversation_history: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Generate a response based on the user's message and intent.
+        
+        Args:
+            message: User's message
+            intent: Detected intent
+            conversation_history: List of previous messages
+            
+        Returns:
+            Generated response
+        """
+        try:
+            # Format conversation history for context
+            history_context = "\n".join([
+                f"User: {entry['user_message']}\nAssistant: {entry['assistant_response']}"
+                for entry in conversation_history[-5:]  # Last 5 messages for context
+            ])
+            
+            # Create the prompt with context
+            prompt = RESPONSE_TEMPLATE.format(
+                intent=intent,
+                message=message,
+                conversation_history=history_context
+            )
+            
+            completion = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": message}
+                ],
+                temperature=0.7,
+                max_tokens=1024,
+                top_p=1,
+            )
+            
+            return completion.choices[0].message.content.strip()
+            
+        except Exception as e:
+            print(f"Error generating response: {e}")
+            return "I apologize, but I'm having trouble processing your request. Please try again."
+    
+    def process_message(self, message: str) -> Dict[str, Any]:
+        """
+        Process a user message and generate a response.
+        
+        Args:
+            message: User's message
+            
+        Returns:
+            Dictionary containing the response and metadata
+        """
+        # Detect intent
+        intent = self.detect_intent(message)
+        
+        # Generate response
+        response = self.generate_response(message, intent, self.conversation_history)
+        
+        # Store in conversation history
+        conversation_entry = {
+            "timestamp": datetime.now(),
+            "user_message": message,
+            "assistant_response": response,
+            "intent": intent
+        }
+        self.conversation_history.append(conversation_entry)
+        
+        # Store in vector store if available
+        if self.vector_store:
+            self.vector_store.add_documents(
+                documents=[message, response],
+                metadatas=[{"type": "user", "intent": intent}, {"type": "assistant", "intent": intent}]
+            )
+        
+        return conversation_entry
+
+    def get_concise_reply(self, user_message: str) -> str:
+        """
+        Generate a concise reply (<=25 words) using the LLM and validate it.
+        """
+        parser = PydanticOutputParser(pydantic_object=ConciseReply)
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": user_message}],
+            max_tokens=50,
+            stop=["\n", ".", "Thank you"],
+            temperature=0.5
+        )
+        reply_text = response.choices[0].message['content'].strip()
+        try:
+            concise = parser.parse({"reply": reply_text})
+            return concise.reply
+        except Exception as e:
+            return f"Error: {str(e)}" 
