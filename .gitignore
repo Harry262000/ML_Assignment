@@ -34,4 +34,4 @@ ENV/
 
 # Project specific
 *.log
-.DS_Store
+.DS_Store 
