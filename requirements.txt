@@ -1,6 +1,6 @@
-langchain==0.2.1
-langchain-openai==0.1.10
-langchain-core==0.2.0
+langchain
+langchain-openai
+langchain-core
 langchain-pinecone==0.1.3
 langchain-chroma==0.1.4
 langchain-weaviate==0.0.4
