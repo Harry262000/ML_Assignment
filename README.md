@@ -1,50 +1,40 @@
-# Real Estate Decision Assistant
+# Real Estate Chatbot
 
-A conversational AI assistant that helps users navigate through the home buying and selling process. The system uses advanced language models and vector databases to provide context-aware responses and validate user inputs.
+A conversational AI assistant for real estate services, built with Streamlit and OpenAI's GPT-4. The chatbot helps users with buying and selling properties, providing personalized assistance and information.
 
 ## Features
 
-- Intent understanding (buy/sell)
-- New home and re-sale logic
-- Input validation
-- Postcode verification
-- Context-aware responses
-- Vector store for conversation memory
+- 🤖 Intelligent conversation handling with slot-based approach
+- 🏠 Property buying and selling assistance
+- 📍 UK postcode validation and area verification
+- 💬 Natural language understanding
+- 📊 Conversation history tracking
+- 🔍 Vector-based memory for context retention
 
 ## Project Structure
 
 ```
 real-estate-chatbot/
-│
-├── src/                        # Source code for the chatbot logic
-│   ├── __init__.py            # Makes src a Python package
-│   ├── chatbot.py             # Core chatbot logic
-│   ├── utils/                 # Utility functions
-│   │   ├── __init__.py
-│   │   ├── postcode_validator.py
-│   │   └── data_loader.py
-│   ├── memory/               # Conversation memory
-│   │   ├── __init__.py
-│   │   └── vector_store.py
-│   └── prompts/             # Prompt templates
-│       ├── __init__.py
-│       └── templates.py
-│
-├── app/                     # Streamlit app
-│   ├── app.py              # Main app entry point
-│   └── pages/              # Additional pages
-│
-├── data/                   # Data storage
-│   ├── postcodes.csv      # Valid postcodes
-│   └── chroma_db/         # Vector store
-│
-├── tests/                 # Unit tests
-├── .env                  # Environment variables
-├── requirements.txt      # Python dependencies
-└── README.md            # This file
+├── app/                        # Streamlit application
+│   ├── app.py                 # Main application file
+│   └── pages/                 # Additional Streamlit pages
+│       └── history.py         # Conversation history page
+├── src/                       # Source code
+│   ├── chatbot.py            # Core chatbot logic
+│   ├── memory/               # Memory management
+│   │   └── vector_store.py   # Vector store implementation
+│   ├── prompts/              # Prompt templates
+│   │   └── templates.py      # System prompts and templates
+│   └── utils/                # Utility functions
+│       └── postcode_validator.py  # UK postcode validation
+├── data/                     # Data files
+│   └── uk_postcodes.csv      # UK postcodes database
+├── .streamlit/               # Streamlit configuration
+├── requirements.txt          # Project dependencies
+└── README.md                # Project documentation
 ```
 
-## Setup
+## Setup Instructions
 
 1. Clone the repository:
 ```bash
@@ -52,7 +42,7 @@ git clone <repository-url>
 cd real-estate-chatbot
 ```
 
-2. Create a virtual environment and activate it:
+2. Create and activate a virtual environment:
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -63,24 +53,48 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Create a `.env` file with your API keys:
-```
-OPENAI_API_KEY=your_api_key_here
+4. Set up environment variables:
+Create a `.streamlit/secrets.toml` file with your OpenAI API key:
+```toml
+OPENAI_API_KEY = "your-api-key-here"
 ```
 
-## Running the Application
-
-To run the Streamlit app:
+5. Run the application:
 ```bash
 streamlit run app/app.py
 ```
 
-## Testing
+## Usage
 
-Run the test suite:
-```bash
-python -m pytest tests/
-```
+1. Open your browser and navigate to `http://localhost:8501`
+2. Start a conversation with the chatbot
+3. The chatbot will guide you through:
+   - Understanding your intent (buying/selling)
+   - Collecting necessary information
+   - Validating your postcode
+   - Providing relevant assistance
+
+## Features in Detail
+
+### Slot-Based Conversation
+- Tracks user information through structured slots
+- Maintains conversation context
+- Handles multiple intents (BUY_HOME, SELL_HOME, GENERAL_QUERY)
+
+### Postcode Validation
+- Validates UK postcode format
+- Verifies postcode existence
+- Checks service area coverage (currently SW London)
+
+### Conversation History
+- Tracks all conversations
+- Displays slot values and responses
+- Allows downloading conversation history
+
+### Vector Store Memory
+- Maintains conversation context
+- Enables semantic search through past interactions
+- Improves response relevance
 
 ## Contributing
 

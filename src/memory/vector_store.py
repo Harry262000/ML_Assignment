@@ -64,6 +64,27 @@ class VectorStore:
             print(f"Warning: ChromaDB not available, using in-memory store: {e}")
             self.store = InMemoryVectorStore()
             self.use_chroma = False
+
+    def _flatten_metadata(self, metadata: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Flatten metadata dictionary to ensure all values are strings.
+        
+        Args:
+            metadata: Original metadata dictionary
+            
+        Returns:
+            Flattened metadata dictionary with string values
+        """
+        flattened = {}
+        for key, value in metadata.items():
+            if isinstance(value, dict):
+                # If value is a dict (like slot_state), flatten it
+                for subkey, subvalue in value.items():
+                    flattened[f"{key}_{subkey}"] = str(subvalue) if subvalue is not None else "None"
+            else:
+                # Convert other values to string
+                flattened[key] = str(value) if value is not None else "None"
+        return flattened
     
     def add_documents(self, documents: List[str], metadatas: List[Dict[str, Any]]):
         """
@@ -75,9 +96,11 @@ class VectorStore:
         """
         if self.use_chroma:
             try:
+                # Flatten metadata for ChromaDB
+                flattened_metadatas = [self._flatten_metadata(meta) for meta in metadatas]
                 self.collection.add(
                     documents=documents,
-                    metadatas=metadatas,
+                    metadatas=flattened_metadatas,
                     ids=[str(i) for i in range(len(documents))]
                 )
             except Exception as e:

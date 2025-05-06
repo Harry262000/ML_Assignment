@@ -1,195 +1,360 @@
-import json
+"""
+Real Estate Chatbot - Single File Implementation with LangChain
+This file contains all the necessary components for the real estate chatbot:
+- LangChain integration for better conversation management
+- Vector store implementation (with in-memory fallback)
+- Prompt templates and chains
+- Chatbot core logic
+- Streamlit UI
+"""
+import streamlit as st
+from typing import Dict, List, Any, Optional
 from datetime import datetime
-from langchain_groq import ChatGroq
+import os
+from openai import OpenAI
+from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
+from langchain.chat_models import ChatOpenAI
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains import LLMChain
+from langchain.memory import VectorStoreRetrieverMemory
 
+# ============= Prompt Templates =============
+INTENT_RECOGNITION_TEMPLATE = """
+You are a real estate assistant. Analyze the following user message and determine their intent.
+Possible intents are: BUY_HOME, SELL_HOME, GENERAL_QUERY, INVALID
 
-class Chatbot:
-    def __init__(self, api_key, postcode_validator):
-        # Initialize LLM
-        self.llm = ChatGroq(client=client, model_name="x-ai/grok-3-mini-beta", api_key=api_key)
+User message: {message}
 
-        # Initialize other components
-        self.postcode_validator = postcode_validator
-        self.memory = ConversationBufferMemory(return_messages=True)
-        self.current_user_id = 123  # Start with user ID 123
-        self.state = {
-            "conversation_state": "start",
-            "intent": None,
-            "home_type": None,
-            "name": None,
-            "phone": None,
-            "email": None,
-            "budget": None,
-            "postcode": None
+Intent:"""
+
+RESPONSE_TEMPLATE = """
+You are a real estate assistant. Follow this business logic for every conversation:
+
+- If the user wants to BUY:
+    - Ask for their name, phone, and email (one at a time, only if not already collected).
+    - Ask for their budget.
+        - If budget < 1 million: Politely say you only cater to properties above 1 million and provide the office number.
+        - If budget >= 1 million: Ask for the postcode of interest.
+            - If postcode is not covered: Politely say you don't cater to that postcode and provide the office number.
+            - If postcode is covered: Assure a callback within 24 hours and ask if you can help with anything else.
+                - If yes: Re-assist.
+                - If no: Thank and close the chat.
+
+- If the user wants to SELL:
+    - Ask for their name, phone, email, and postcode (one at a time, only if not already collected).
+        - If postcode is not covered: Politely say you don't cater to that postcode and provide the office number.
+        - If postcode is covered: Assure a callback within 24 hours and ask if you can help with anything else.
+            - If yes: Re-assist.
+            - If no: Thank and close the chat.
+
+- Never assist with renting.
+- Always remember previously collected information and do not ask for it again.
+- Use polite, professional language.
+- The office number is 1300 111 222.
+
+Assume the following postcodes are NOT covered: 0000, 9999, 1234. All others are covered.
+
+Conversation so far:
+{conversation_history}
+
+User message: {message}
+
+Assistant:"""
+
+# ============= Vector Store Implementation =============
+class InMemoryVectorStore:
+    """Simple in-memory vector store implementation."""
+    def __init__(self):
+        self.documents = []
+        self.metadatas = []
+    
+    def add_documents(self, documents: List[str], metadatas: List[Dict[str, Any]]):
+        """Add documents to in-memory store."""
+        self.documents.extend(documents)
+        self.metadatas.extend(metadatas)
+    
+    def query(self, query_text: str, n_results: int = 5) -> Optional[List[Dict[str, Any]]]:
+        """Simple keyword-based search."""
+        if not self.documents:
+            return None
+        return {
+            "documents": self.documents[-n_results:],
+            "metadatas": self.metadatas[-n_results:]
         }
 
-        # Define prompt templates
-        self.INTENT_PROMPT = PromptTemplate.from_template(
-            "Classify the intent of the following message as 'buy', 'sell', or 'other': {input}"
-        )
-        self.HOME_TYPE_PROMPT = PromptTemplate.from_template(
-            "The user was asked: 'Are you interested in a new home or a resale home?'. Classify their response as 'new home', 'resale', or 'unclear'. User's response: {input}"
-        )
-        self.USER_DETAILS_PROMPT = PromptTemplate.from_template(
-            "The user was asked: 'May I have your name, phone number, and email address, please?'. Extract the name, phone, and email from their response and output as JSON: {{'name': value, 'phone': value, 'email': value, 'is_question': boolean}}. If any detail is missing or the response is a question, set 'is_question' to true and use null for missing fields. User's response: {input}"
-        )
-        self.ENTITY_PROMPT = PromptTemplate.from_template(
-            "Extract the budget and postcode from the following message and output as JSON: {{'budget': value, 'postcode': value}}. If not present, use null. Message: {input}"
-        )
-        self.FALLBACK_PROMPT = PromptTemplate.from_template(
-            "The user was asked: '{question}'. Their response was: '{input}'. This doesn't match the expected format. Generate a polite response to guide the user back to providing the requested information, or answer their question if applicable."
-        )
-
-    def extract_intent(self, user_input):
-        # Handle numeric input
-        user_input = user_input.strip()
-        if user_input == "1":
-            return "buy"
-        elif user_input == "2":
-            return "sell"
-
-        # Handle natural language input
-        prompt = self.INTENT_PROMPT.format(input=user_input)
-        # Directly call the client's chat.completions.create method with the necessary parameters
-        return self.llm.client.chat.completions.create(
-            model=self.llm.model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,  # You can adjust these parameters as needed
-            max_tokens=1024,
-            top_p=1,
-            stream=False
-        ).choices[0].message.content.lower()
-
-    def extract_entities(self, user_input):
-        prompt = self.ENTITY_PROMPT.format(input=user_input)
-        response = self.llm.invoke(prompt).content
+class VectorStore:
+    def __init__(self, persist_directory: str = "data/chroma_db"):
+        """Initialize the vector store."""
         try:
-            entities = json.loads(response)
-            budget = float(entities.get("budget")) if entities.get("budget") else None
-            postcode = entities.get("postcode")
-        except (json.JSONDecodeError, ValueError):
-            budget = None
-            postcode = None
-        return budget, postcode
+            import chromadb
+            from chromadb.config import Settings
+            from chromadb.utils import embedding_functions
+            
+            os.makedirs(persist_directory, exist_ok=True)
+            
+            self.client = chromadb.PersistentClient(
+                path=persist_directory,
+                settings=Settings(
+                    anonymized_telemetry=False,
+                    allow_reset=True
+                )
+            )
+            
+            self.embedding_function = embedding_functions.DefaultEmbeddingFunction()
+            self.collection = self.client.get_or_create_collection(
+                name="real_estate_chat",
+                embedding_function=self.embedding_function
+            )
+            self.use_chroma = True
+            
+        except (ImportError, RuntimeError) as e:
+            print(f"Warning: ChromaDB not available, using in-memory store: {e}")
+            self.store = InMemoryVectorStore()
+            self.use_chroma = False
+    
+    def add_documents(self, documents: List[str], metadatas: List[Dict[str, Any]]):
+        """Add documents to the vector store."""
+        if self.use_chroma:
+            try:
+                self.collection.add(
+                    documents=documents,
+                    metadatas=metadatas,
+                    ids=[str(i) for i in range(len(documents))]
+                )
+            except Exception as e:
+                print(f"Warning: Failed to add documents to ChromaDB: {e}")
+        else:
+            self.store.add_documents(documents, metadatas)
+    
+    def query(self, query_text: str, n_results: int = 5) -> Optional[List[Dict[str, Any]]]:
+        """Query the vector store."""
+        if self.use_chroma:
+            try:
+                results = self.collection.query(
+                    query_texts=[query_text],
+                    n_results=n_results
+                )
+                return results
+            except Exception as e:
+                print(f"Warning: Failed to query ChromaDB: {e}")
+                return None
+        else:
+            return self.store.query(query_text, n_results)
 
-    def extract_home_type(self, user_input):
-        prompt = self.HOME_TYPE_PROMPT.format(input=user_input)
-        response = self.llm.invoke(prompt).content.lower()
-        return response
-
-    def extract_user_details(self, user_input):
-        prompt = self.USER_DETAILS_PROMPT.format(input=user_input)
-        response = self.llm.invoke(prompt).content
+# ============= LangChain Integration =============
+class LangChainRealEstateChatbot:
+    def __init__(self, api_key: str, vector_store: Optional[VectorStore] = None):
+        """Initialize the LangChain-powered chatbot."""
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+        
+        # Initialize LangChain components
+        self.llm = ChatOpenAI(
+            model_name="x-ai/grok-3-mini-beta",
+            temperature=0.7,
+            openai_api_key=api_key,
+            openai_api_base="https://openrouter.ai/api/v1"
+        )
+        
+        # Initialize vector store
+        self.vector_store = vector_store or VectorStore()
+        
+        # Initialize conversation memory
+        self.memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True
+        )
+        
+        # Initialize intent recognition chain
+        self.intent_chain = LLMChain(
+            llm=self.llm,
+            prompt=PromptTemplate(
+                input_variables=["message"],
+                template=INTENT_RECOGNITION_TEMPLATE
+            )
+        )
+        
+        # Initialize main conversation chain
+        self.conversation_chain = ConversationChain(
+            llm=self.llm,
+            memory=self.memory,
+            verbose=True
+        )
+        
+        # Initialize response generation chain
+        self.response_chain = LLMChain(
+            llm=self.llm,
+            prompt=PromptTemplate(
+                input_variables=["intent", "message", "conversation_history"],
+                template=RESPONSE_TEMPLATE
+            )
+        )
+        
+        # Initialize text splitter for document processing
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200
+        )
+    
+    def detect_intent(self, message: str) -> str:
+        """Detect the user's intent using LangChain."""
         try:
-            details = json.loads(response)
-            name = details.get("name")
-            phone = details.get("phone")
-            email = details.get("email")
-            is_question = details.get("is_question", False)
-        except (json.JSONDecodeError, ValueError):
-            name, phone, email, is_question = None, None, None, True
-        return name, phone, email, is_question
+            intent = self.intent_chain.predict(message=message).strip().upper()
+            valid_intents = ["BUY_HOME", "SELL_HOME", "GENERAL_QUERY", "INVALID"]
+            
+            if intent not in valid_intents:
+                return "GENERAL_QUERY"
+            
+            return intent
+            
+        except Exception as e:
+            print(f"Error detecting intent: {e}")
+            return "GENERAL_QUERY"
+    
+    def generate_response(
+        self,
+        message: str,
+        intent: str,
+        conversation_history: List[Dict[str, Any]]
+    ) -> str:
+        """Generate a response using LangChain."""
+        try:
+            # Format conversation history
+            history_context = "\n".join([
+                f"User: {entry['user_message']}\nAssistant: {entry['assistant_response']}"
+                for entry in conversation_history[-5:]
+            ])
+            
+            # Generate response using LangChain
+            response = self.response_chain.predict(
+                intent=intent,
+                message=message,
+                conversation_history=history_context
+            )
+            
+            # Update conversation memory
+            self.memory.save_context(
+                {"input": message},
+                {"output": response}
+            )
+            
+            return response.strip()
+            
+        except Exception as e:
+            print(f"Error generating response: {e}")
+            return "I apologize, but I'm having trouble processing your request. Please try again."
+    
+    def process_message(self, message: str) -> Dict[str, Any]:
+        """Process a user message using LangChain."""
+        # Detect intent
+        intent = self.detect_intent(message)
+        
+        # Generate response
+        response = self.generate_response(message, intent, self.memory.chat_memory.messages)
+        
+        # Store in vector store
+        if self.vector_store:
+            self.vector_store.add_documents(
+                documents=[message, response],
+                metadatas=[{"type": "user", "intent": intent}, {"type": "assistant", "intent": intent}]
+            )
+        
+        return {
+            "timestamp": datetime.now(),
+            "user_message": message,
+            "assistant_response": response,
+            "intent": intent
+        }
 
-    def handle_fallback(self, user_input, question):
-        prompt = self.FALLBACK_PROMPT.format(question=question, input=user_input)
-        return self.llm.invoke(prompt).content
+# ============= Streamlit UI =============
+def main():
+    # Set page config
+    st.set_page_config(
+        page_title="Real Estate Assistant",
+        page_icon="🏠",
+        layout="centered"
+    )
+    
+    # Initialize chatbot
+    if "chatbot" not in st.session_state:
+        st.session_state.chatbot = LangChainRealEstateChatbot(api_key=st.secrets["OPENAI_API_KEY"])
+    
+    # Initialize session state for messages
+    if "messages" not in st.session_state:
+        st.session_state.messages = [{
+            "role": "assistant",
+            "content": "I'm real estate chatbot. How can I help you with buying or selling a property?"
+        }]
+    
+    # Main content area
+    st.title("🏠 Real Estate Decision Assistant")
+    
+    # Sidebar with project information
+    with st.sidebar:
+        st.header("About This Project")
+        st.markdown("""
+        ### Real Estate Decision Assistant
+        This chatbot helps users make informed decisions about buying or selling property.
+        
+        #### Technical Stack:
+        - LangChain for conversation management
+        - OpenRouter API (grok-3-mini-beta)
+        - Vector Store (Memory)
+        - Streamlit UI
+        
+        #### Features:
+        - Intent recognition
+        - Contextual responses
+        - Conversation memory
+        - Vector-based search
+        """)
+    
+    # Disclaimer expander
+    with st.expander("ℹ️ About This Demo"):
+        st.caption(
+            """This is a demo version of the real estate decision assistant. The system is designed to
+            help users navigate through the home buying and selling process. Please note that this demo
+            is limited to 10 interactions and may be unavailable if too many people use the service
+            concurrently. Thank you for your understanding.
+            """
+        )
+    
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Chat input
+    prompt = st.chat_input("How can I help you with your real estate needs?")
+    
+    if prompt:
+        # Add user's message to chat history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Get and display assistant response
+        with st.chat_message("assistant"):
+            try:
+                response = st.session_state.chatbot.process_message(prompt)
+                st.markdown(response["assistant_response"])
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": response["assistant_response"]}
+                )
+            except Exception as e:
+                error_message = f"❌ Error: {str(e)}"
+                st.markdown(error_message)
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": error_message}
+                )
 
-    def process_input(self, user_input, user_id):
-        # Handle reassistance state
-        if self.state["conversation_state"] == "reassistance":
-            if user_input.lower() in ["no", "goodbye"]:
-                self.state["conversation_state"] = "start"
-                self.memory.chat_memory.messages = []  # Reset memory
-                self.state["intent"] = None
-                self.state["home_type"] = None
-                self.state["name"] = None
-                self.state["phone"] = None
-                self.state["email"] = None
-                self.state["budget"] = None
-                self.state["postcode"] = None
-                self.current_user_id += 1
-                return "Thank you for chatting with us. Goodbye. \n\n--- New Chat Started ---\nUser ID: {}\nHello! How can I help you today?\n1. You want to buy a house\n2. You want to sell a house".format(
-                    self.current_user_id)
-            else:
-                # Treat as a new query without resetting user ID
-                self.state["conversation_state"] = "start"
-                return self.process_input(user_input,
-                                          user_id)  # Recursively process new input
-
-        # State machine to handle conversation flow
-        if self.state["conversation_state"] == "start":
-            intent = self.extract_intent(user_input)
-            if "buy" in intent:
-                self.state["intent"] = "buy"
-                self.state["conversation_state"] = "home_type"
-                return "Are you interested in a new home or a resale home?"
-            elif "sell" in intent:
-                self.state["intent"] = "sell"
-                self.state["conversation_state"] = "user_details"
-                return "May I have your name, phone number, and email address, please?"
-            else:
-                return "Sorry, I didn’t understand. Hello! How can I help you today?\n1. You want to buy a house\n2. You want to sell a house"
-
-        elif self.state["conversation_state"] == "home_type":
-            home_type = self.extract_home_type(user_input)
-            if home_type == "new home":
-                self.state["home_type"] = "new home"
-            elif home_type == "resale":
-                self.state["home_type"] = "resale"
-            else:
-                return "Are you interested in a new home or a resale home?"
-            self.state["conversation_state"] = "user_details"
-            return "May I have your name, phone number, and email address, please?"
-
-        elif self.state["conversation_state"] == "user_details":
-            name, phone, email, is_question = self.extract_user_details(
-                user_input)
-            if is_question or not all([name, phone, email]):
-                question = "May I have your name, phone number, and email address, please?"
-                return self.handle_fallback(user_input, question)
-            self.state["name"] = name
-            self.state["phone"] = phone
-            self.state["email"] = email
-            self.state["conversation_state"] = "budget_postcode"
-            if self.state["intent"] == "buy":
-                return f"Thank you, {name}! What is your budget? What is your postcode?"
-            else:  # sell
-                return f"Thank you, {name}! What is your postcode?"
-
-        elif self.state["conversation_state"] == "budget_postcode":
-            budget, postcode = self.extract_entities(user_input)
-            self.state["budget"] = budget
-            self.state["postcode"] = postcode
-
-            # If any required info is missing, ask again
-            if self.state["intent"] == "buy" and (not budget or not postcode):
-                return "What is your budget? What is your postcode?"
-            if self.state["intent"] == "sell" and not postcode:
-                return "What is your postcode?"
-
-            # Validate inputs
-            if self.state["intent"] == "buy":
-                if budget < 1000000:
-                    self.state["conversation_state"] = "start"
-                    self.current_user_id += 1
-                    return "Sorry, we don’t cater to budgets below 1 million. Please call the office on 1800 111 222 to get help.\n\n--- New Chat Started ---\nUser ID: {}\nHello! How can I help you today?\n1. You want to buy a house\n2. You want to sell a house".format(
-                        self.current_user_id)
-            if not self.postcode_validator.is_valid(postcode):
-                self.state["conversation_state"] = "start"
-                self.current_user_id += 1
-                return "Sorry, we don’t cater to Post codes that you provided. Please call the office on 1800 111 222 to get help.\n\n--- New Chat Started ---\nUser ID: {}\nHello! How can I help you today?\n1. You want to buy a house\n2. You want to sell a house".format(
-                        self.current_user_id)
-
-
-            # Move to reassistance state
-            self.state["conversation_state"] = "reassistance"
-            self.memory.save_context({"input": user_input},
-                                     {"output": "Callback assured"})
-            return "I can expect someone to get in touch with you within 24 hours via phone or email. Is there anything I can help you with?"
-
-
-# Example usage (requires api_key and postcode_validator)
-# from your_postcode_validator import PostcodeValidator
-chatbot = Chatbot(api_key=api_key, postcode_validator=PostcodeValidator())
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,7 @@
 import streamlit as st
 import sys
 import os
-
+import json
 # Add the src directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -104,7 +104,7 @@ with st.sidebar:
         <div class="sidebar-section">
             <div class="sidebar-section-title">Technical Stack</div>
             <ul class="sidebar-section-list">
-                <li>OpenRouter API (grok-3-mini-beta)</li>
+                <li>OpenRouter API (openai/gpt-4o)</li>
                 <li>LangChain/Langgraph</li>
                 <li>Streamlit</li>
                 <li>Python</li>
