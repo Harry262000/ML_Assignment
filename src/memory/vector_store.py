@@ -1,17 +1,14 @@
-"""
-Vector store implementation using Chroma.
-"""
 from typing import List, Dict, Any
 import chromadb
 from chromadb.config import Settings
 
 class VectorStore:
-    def __init__(self, persist_directory: str = "data/chroma_db"):
+    def __init__(self, persist_directory: str = ":memory:"):
         """
-        Initialize the vector store.
+        Initialize the vector store. Default to in-memory.
         
         Args:
-            persist_directory: Directory to persist the vector store
+            persist_directory: Directory to persist the vector store (defaults to in-memory)
         """
         self.client = chromadb.Client(Settings(
             persist_directory=persist_directory,
@@ -48,4 +45,4 @@ class VectorStore:
             query_texts=[query_text],
             n_results=n_results
         )
-        return results 
+        return results
