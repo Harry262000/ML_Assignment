@@ -1,3 +1,3 @@
 """
-Prompt templates for the Real Estate Chatbot.
+Prompt templates package for the Real Estate Chatbot.
 """ 

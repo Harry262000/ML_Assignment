@@ -2,7 +2,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from openai import OpenAI
 from src.memory.vector_store import VectorStore
-from .prompts.templates import (
+from src.prompts.templates import (
     INTENT_RECOGNITION_TEMPLATE,
     RESPONSE_TEMPLATE
 )
