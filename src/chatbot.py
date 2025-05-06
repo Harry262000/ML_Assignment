@@ -4,24 +4,11 @@ Core chatbot logic for the Real Estate Decision Assistant.
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from openai import OpenAI
-from .utils.postcode_validator import validate_postcode
 from .memory.vector_store import VectorStore
 from .prompts.templates import (
     INTENT_RECOGNITION_TEMPLATE,
-    RESPONSE_TEMPLATE,
-    POSTCODE_VALIDATION_TEMPLATE
+    RESPONSE_TEMPLATE
 )
-from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel, validator
-
-class ConciseReply(BaseModel):
-    reply: str
-
-    @validator('reply')
-    def short_reply(cls, value):
-        if len(value.split()) > 25:
-            raise ValueError("Response is too long.")
-        return value
 
 class RealEstateChatbot:
     def __init__(self, api_key: str, vector_store: Optional[VectorStore] = None):
@@ -74,19 +61,6 @@ class RealEstateChatbot:
         except Exception as e:
             print(f"Error detecting intent: {e}")
             return "GENERAL_QUERY"
-    
-    def validate_postcode(self, postcode: str) -> bool:
-        """
-        Validate a postcode.
-        
-        Args:
-            postcode: Postcode to validate
-            
-        Returns:
-            True if postcode is valid, False otherwise
-        """
-        # TODO: Implement actual postcode validation using the postcode_validator
-        return True
     
     def generate_response(
         self,
@@ -168,23 +142,4 @@ class RealEstateChatbot:
                 metadatas=[{"type": "user", "intent": intent}, {"type": "assistant", "intent": intent}]
             )
         
-        return conversation_entry
-
-    def get_concise_reply(self, user_message: str) -> str:
-        """
-        Generate a concise reply (<=25 words) using the LLM and validate it.
-        """
-        parser = PydanticOutputParser(pydantic_object=ConciseReply)
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": user_message}],
-            max_tokens=50,
-            stop=["\n", ".", "Thank you"],
-            temperature=0.5
-        )
-        reply_text = response.choices[0].message['content'].strip()
-        try:
-            concise = parser.parse({"reply": reply_text})
-            return concise.reply
-        except Exception as e:
-            return f"Error: {str(e)}" 
+        return conversation_entry 
